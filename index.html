@@ -227,9 +227,8 @@ direction that favours the <em>more expensive</em> arrangement by an amount indi
 from rounding. The pixel-difference census agrees: 59.68% of pixels differ by more than 2 levels
 from the original in all three cases, max error 15, 15, 14.</p>
 
-<p>So use two passes if you are writing a fast resampler and want the speed. Do not use them
-expecting a quality improvement — on this evidence there is none, and the folklore that made
-you restructure your pipeline bought you nothing.</p>
+<p>So use two passes for speed, never for quality — on this evidence there is none, and the
+folklore that made you restructure your pipeline bought you nothing.</p>
 
 <h2>Experiment 5 — at equal bytes the advantage survives, and bitrate cannot buy it back</h2>
 
