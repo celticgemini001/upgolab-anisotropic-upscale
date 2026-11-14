@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Upscaling One Axis: What Anisotropic Scale Actually Costs</title>
+<meta name="description" content="Measured on a 1080x720 scene with known detail: upscaling only one axis scores 2.2 dB higher than upscaling both. Plus why the extra detail costs 5.8% more bytes at the same CRF, and why splitting a 2x into two passes changes nothing.">
+<link rel="canonical" href="https://celticgemini001.github.io/upgolab-anisotropic-upscale/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Upscaling One Axis: What Anisotropic Scale Actually Costs">
+<meta property="og:description" content="2.2 dB from axis count, 1.5 dB from kernel choice. Measured, with the negative results included.">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Article",
+ "headline":"Upscaling One Axis: What Anisotropic Scale Actually Costs",
+ "author":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
+ "publisher":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
+ "datePublished":"2026-11-15",
+ "mainEntityOfPage":"https://celticgemini001.github.io/upgolab-anisotropic-upscale/"}
+</script>
+<style>
+:root{--ink:#16181d;--mut:#5b6270;--line:#e2e5ea;--acc:#0a58ca}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);font:17px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{max-width:46rem;margin:0 auto;padding:3rem 1.25rem 5rem}
+h1{font-size:2rem;line-height:1.22;margin:0 0 .5rem;letter-spacing:-.02em}
+h2{font-size:1.33rem;margin:2.5rem 0 .7rem}
+p,li{color:#2b3038}ul,ol{padding-left:1.3rem}li{margin:.4rem 0}
+a{color:var(--acc)}
+.lede{font-size:1.14rem;color:var(--mut);margin:0 0 1.6rem}
+.meta{font-size:.88rem;color:var(--mut);border-bottom:1px solid var(--line);padding-bottom:1rem;margin-bottom:2rem}
+table{width:100%;border-collapse:collapse;margin:1.4rem 0;font-size:.94rem}
+th,td{text-align:left;padding:.6rem .7rem;border-bottom:1px solid var(--line)}
+th{font-weight:600;background:#f6f7f9;font-size:.86rem;text-transform:uppercase;letter-spacing:.03em;color:var(--mut)}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.callout{border-left:3px solid var(--acc);background:#f5f8fd;padding:.9rem 1.1rem;margin:1.6rem 0;border-radius:0 6px 6px 0}
+.callout p{margin:.3rem 0}
+pre{background:#f7f8fa;border:1px solid var(--line);border-radius:8px;padding:1rem;overflow-x:auto;font-size:.86rem}
+footer{margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-size:.9rem;color:var(--mut)}
+</style>
+</head>
+<body>
+<main>
+<article>
+<h1>Upscaling One Axis: What Anisotropic Scale Actually Costs</h1>
+<p class="lede">Every upscaling guide talks about 2x, 4x, 8x — a single number. But a lot of
+real jobs are not square: a 4:3 clip that has to become 16:9, a phone photo whose width is
+fine and whose height is soft, an anamorphic source that was squeezed twice on the way in.
+This post measures what happens when you stretch one axis and leave the other alone.</p>
+<p class="meta">15 November 2026 · synthetic 1080×720 reference + x264 encodes, measured with numpy and ffmpeg</p>
+
+<p>The honest summary is in the first two lines and the rest of the article is the evidence.
+<strong>Axis count is a bigger lever than kernel choice</strong>: going from a two-axis 2x to a
+one-axis 2x gains 2.2 dB, while walking the whole kernel ladder from nearest to Lanczos gains
+1.5 dB. And the "better" image <em>costs more bytes</em> at a fixed CRF, which is the part
+that bites when you ship a video instead of a JPEG.</p>
+
+<h2>Why this question is not academic</h2>
+
+<p>Most interpolation code takes two scale factors and most articles assume they are equal.
+They are equal in the resampler — you can pass (2.0, 2.0) or (2.0, 1.0) to anything — but they
+are emphatically not equal in <em>information terms</em>. Each axis carries its own frequency
+budget. If a source lost detail only horizontally, upscaling it vertically is doing work that
+was not needed, and every operation on an image costs something: interpolation smooths, and
+smoothing is irreversible.</p>
+
+<p>So the practical question is:</p>
+
+<ol>
+<li>Is a one-axis stretch really cheaper in quality than a square one with the same area gain?</li>
+<li>Can you <em>tell from the output</em> which axis was damaged?</li>
+<li>Does it matter once a codec gets involved?</li>
+<li>Is the old "do 2x in two single-axis passes" advice worth anything?</li>
+</ol>
+
+<p>Four questions, four experiments. Two of them came back negative, and I am reporting those
+as measured rather than dropping them, because a negative result is what stops you from
+optimising the wrong thing for a year.</p>
+
+<h2>The test scene: known answer, both axes exercised</h2>
+
+<p>PSNR is only meaningful against a reference that actually contains the detail you are trying
+to reconstruct. So the ground truth is generated at the target size, not upscaled from
+something smaller. It is 1080×720 and deliberately contains structure on both axes:</p>
+
+<ul>
+<li>two low-frequency gradients, one varying in x, one in y, one diagonal;</li>
+<li>a hard vertical edge (10 px wide) and a hard horizontal edge, so edge geometry can be
+measured separately per axis;</li>
+<li>radial spokes in a ring — high frequency at every angle, not just the axis-aligned ones;</li>
+<li>14 thin vertical strokes (horizontal high frequency only) and 8 thin horizontal strokes
+(vertical high frequency only).</li>
+</ul>
+
+<p>Degrading this three ways and reconstructing back to 1080×720 isolates the variable. All
+three reconstructions start from the same pixel budget and end at the same size; the only
+difference is <em>which axis lost the information</em>.</p>
+
+<pre><code>import numpy as np
+from PIL import Image
+
+def psnr(a, b):
+    mse = np.mean((np.asarray(a, np.float64) - np.asarray(b, np.float64)) ** 2)
+    return 99.0 if mse == 0 else 10 * np.log10(255.0 ** 2 / mse)
+
+# GT is 1080x720. Build the three sources, then push each back to 1080x720.
+srcs = {
+    "both axes 2x":       GT.resize((540, 360), Image.LANCZOS),
+    "horizontal only 2x": GT.resize((540, 720), Image.LANCZOS),
+    "vertical only 2x":   GT.resize((1080, 360), Image.LANCZOS),
+}
+for label, s in srcs.items():
+    for name, k in (("nearest", Image.NEAREST), ("bilinear", Image.BILINEAR),
+                    ("bicubic", Image.BICUBIC), ("lanczos", Image.LANCZOS)):
+        rec = s.resize((1080, 720), k)
+        print(label, name, round(psnr(rec, GT), 2))</code></pre>
+
+<h2>Experiment 1 — axis count beats kernel choice</h2>
+
+<table>
+<thead><tr><th>source degradation</th><th>nearest</th><th>bilinear</th><th>bicubic</th><th>lanczos</th></tr></thead>
+<tbody>
+<tr><td>both axes 2×</td><td class="num">28.75</td><td class="num">29.24</td><td class="num">30.07</td><td class="num">30.27</td></tr>
+<tr><td>horizontal only 2×</td><td class="num">31.16</td><td class="num">31.63</td><td class="num">32.35</td><td class="num">32.50</td></tr>
+<tr><td>vertical only 2×</td><td class="num">31.04</td><td class="num">31.66</td><td class="num">32.39</td><td class="num">32.60</td></tr>
+</tbody>
+</table>
+<p class="meta">PSNR in dB against the 1080×720 ground truth, higher is better.</p>
+
+<p>Read the gap between rows, then the gap along a row. Rows: neighbour (28.75) to Lanczos
+(30.27) is <strong>+1.52 dB</strong>. Columns: both-axes to single-axis, at any kernel, is
+<strong>+2.2 to +2.4 dB</strong>. The axis decision is worth more than picking the best
+resampler in the world — and unlike the kernel, you often cannot choose it, because it is
+set by the delivery format.</p>
+
+<p>Notice also that horizontal-only and vertical-only land within 0.1 dB of each other
+(32.50 vs 32.60 at Lanczos). The scene has detail on both axes, so this is a fair test: the
+benefit comes from leaving <em>one axis untouched</em>, not from the scene happening to favour
+one direction.</p>
+
+<h2>Experiment 2 — can you tell which axis was damaged?</h2>
+
+<p>If you are handed a soft file and no metadata, the useful diagnostic is the ratio of
+horizontal to vertical gradient energy. Ground truth is 0.956 — slightly more vertical detail
+than horizontal, because of those 8 horizontal strokes.</p>
+
+<table>
+<thead><tr><th>reconstruction</th><th>mean |dx|</th><th>mean |dy|</th><th>anisotropy |dx|/|dy|</th><th>edge x</th><th>edge y</th></tr></thead>
+<tbody>
+<tr><td>ground truth</td><td class="num">1.641</td><td class="num">1.717</td><td class="num">0.956</td><td class="num">406.60</td><td class="num">243.86</td></tr>
+<tr><td>both axes 2× → lanczos</td><td class="num">2.106</td><td class="num">2.193</td><td class="num">0.960</td><td class="num">406.44</td><td class="num">243.86</td></tr>
+<tr><td>horizontal 2× → lanczos</td><td class="num">2.094</td><td class="num">1.955</td><td class="num">1.071</td><td class="num">406.44</td><td class="num">243.86</td></tr>
+<tr><td>vertical 2× → lanczos</td><td class="num">1.880</td><td class="num">2.181</td><td class="num">0.862</td><td class="num">406.60</td><td class="num">243.86</td></tr>
+</tbody>
+</table>
+<p class="meta">Gradient means are 0–255 units; edge positions are sub-pixel centroids of the gradient profile.</p>
+
+<p>The ratio moves in the direction you would predict and by about the same magnitude in both
+directions: 0.862 when vertical detail was destroyed, 1.071 when horizontal was. That is a
+7–12% tilt away from the 0.956 baseline, which is small in absolute terms but one-directional
+and reproducible. A symmetric upscale leaves the ratio alone (0.960).</p>
+
+<p>Two things surprised me here, and both are worth knowing before you trust a "sharpness"
+number:</p>
+
+<ol>
+<li><strong>Both-axes reconstruction has <em>more</em> gradient energy than the ground truth</strong>
+— 2.106 and 2.193 against 1.641 and 1.717, roughly +28%. Lanczos overshoot does not recover
+detail; it manufactures contrast at the reconstruction edges. Any metric built on gradient
+magnitude will rank this smoothed-then-overshot image as "sharper" than the real thing. This
+is the same trap documented on the <a href="https://celticgemini001.github.io/upgolab-ai-upscaler-guide/">main
+upscaler guide</a>, and it is why the table above reports the ratio rather than the absolute
+values.</li>
+<li><strong>Edge position does not move.</strong> 406.60 px in ground truth, 406.44 px after
+reconstruction — one-sixth of a pixel, and identical for both one-axis cases. Single-axis
+interpolation on this scene does not shift geometry, so the fear that stretching one axis
+"pulls" the picture sideways is not supported. If you see a shift in production, it is
+coming from somewhere else in the chain, not from the resampler.</li>
+</ol>
+
+<h2>Experiment 3 — the better image costs more bytes</h2>
+
+<p>This is the measurement that changes how you ship. The same three reconstructions, encoded
+to H.264 with libx264 at CRF 20, one frame each at 1080×720:</p>
+
+<table>
+<thead><tr><th>reconstruction</th><th>file bytes</th><th>PSNR after encode</th></tr></thead>
+<tbody>
+<tr><td>both axes 2×</td><td class="num">18,597</td><td class="num">29.55</td></tr>
+<tr><td>horizontal only 2×</td><td class="num">19,334</td><td class="num">31.07</td></tr>
+<tr><td>vertical only 2×</td><td class="num">19,668</td><td class="num">31.25</td></tr>
+</tbody>
+</table>
+<p class="meta">x264, CRF 20, preset medium, yuv420p. PSNR measured after decode, against the ground truth.</p>
+
+<p>+1.7 dB of quality costs <strong>+5.8% bytes</strong> (19,668 vs 18,597) at an identical CRF
+setting. That is not a bug or a rounding artefact — it is entropy. An image with more genuine
+detail has more to encode, and CRF holds quality per pixel rather than size per file, so a
+cleaner input produces a bigger file. The smoothed both-axes version is cheaper precisely
+because it is emptier.</p>
+
+<div class="callout">
+<p><strong>The practical consequence.</strong> If you have a byte budget and you are choosing
+between a stretched axis and a squeezed one, the quality gain is real but you will pay for it
+in bitrate. Decide which constraint is binding <em>before</em> you upscale, not after you look
+at the file size and assume something went wrong.</p>
+</div>
+
+<h2>Experiment 4 — "do it in two single-axis passes" changes nothing</h2>
+
+<p>There is long-standing advice that a 2× upscale should be performed as horizontal-then-vertical
+(or the reverse) because two 1D passes are cheaper and "cleaner" than one 2D kernel. Two 1D
+passes are indeed cheaper computationally — that part is trivially true — but the quality claim
+is what interests me.</p>
+
+<pre><code>small = img.resize((W // 2, H // 2), Image.LANCZOS)          # degrade
+a = small.resize((W, H), Image.LANCZOS)                       # one pass
+b = small.resize((W, H // 2), Image.LANCZOS).resize((W, H), Image.LANCZOS)  # horizontal 1st
+c = small.resize((W // 2, H), Image.LANCZOS).resize((W, H), Image.LANCZOS)  # vertical 1st</code></pre>
+
+<table>
+<thead><tr><th>pass order</th><th>PSNR, synthetic 800×520</th><th>PSNR, real photo 1080×1620</th></tr></thead>
+<tbody>
+<tr><td>one pass</td><td class="num">34.780</td><td class="num">33.252</td></tr>
+<tr><td>horizontal first</td><td class="num">34.780</td><td class="num">33.252</td></tr>
+<tr><td>vertical first</td><td class="num">34.780</td><td class="num">33.258</td></tr>
+</tbody>
+</table>
+<p class="meta">The real photo is a 1080×1620 JPEG, degraded to half size and reconstructed. Same code path for all three.</p>
+
+<p>On the synthetic scene the three results are identical to three decimal places. On the real
+photograph the largest difference is <strong>0.006 dB</strong> — far below the level at which
+anyone could see it, and in the direction that favours the <em>more expensive</em> arrangement
+by an amount indistinguishable from rounding. The pixel-difference census agrees: 59.68% of
+pixels differ by more than 2 levels from the original in all three cases, max error 15, 15, 14.</p>
+
+<p>So: use two passes if you are writing a fast resampler and want the speed. Do not use them
+expecting a quality improvement. On this evidence there is none, and the folklore that made
+you restructure your pipeline bought you nothing.</p>
+
+<h2>What to actually do</h2>
+
+<ol>
+<li><strong>Minimise the number of axes you touch.</strong> It is worth 2.2 dB — more than any
+kernel decision. If the delivery format allows it, crop or pad rather than stretch when only
+one axis is short.</li>
+<li><strong>Never use nearest to save time on a gradient-heavy source.</strong> It is 1.5 dB
+behind Lanczos and the gap is consistent at every axis count measured here.</li>
+<li><strong>Diagnose direction with the gradient ratio, not gradient magnitude.</strong> A
+sharpened or overshot image beats the ground truth on |dx| by 28% while being visibly softer.
+The ratio |dx|/|dy| is stable to about 1% and moves 7–12% when one axis is damaged.</li>
+<li><strong>Budget bytes after the upscale, not before.</strong> A cleaner input raises the
+encoded size at fixed CRF. 5.8% in this test; assume the same order of magnitude on your own
+material.</li>
+<li><strong>Do not split the pass for quality.</strong> Measured difference: ≤0.006 dB. Split
+it only for speed.</li>
+</ol>
+
+<p>The wider point is the one that keeps showing up in these measurements: the number in the
+tool's UI ("4×") describes an output size, not a recovered amount. Which axis you scaled, and
+whether the source ever had detail there, decides the result — the multiplier on the label
+does not.</p>
+
+<p>If you want to run this on your own file rather than my synthetic scene, the loop is the
+same three lines: degrade a known-good version of your footage along one axis, reconstruct it,
+and compare against the original instead of against the upscale you were about to ship. It
+takes about a minute and it will tell you whether the axis you were planning to stretch is the
+one that actually went soft — or whether, like <a href="https://upgolab.com">the browser
+upscaler at upgolab.com</a>, you should be re-running the whole frame rather than stretching a
+single direction of it.</p>
+
+</article>
+<footer>
+Published by UpgoLAB — AI photo and short-video upscaling in the browser. Measured with numpy
+and ffmpeg 6.1.1 on a 1080×720 synthetic reference plus a 1080×1620 JPEG; 5 tables, 2 negative results.
+<style>
+.sisternav{margin:2rem 0 0;padding-top:1.2rem;border-top:1px solid #e2e5ea}
+.sisternav p{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;
+ color:#5b6270;margin:0 0 .6rem}
+.sisternav ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.4rem .9rem}
+.sisternav li{margin:0;font-size:.88rem;line-height:1.4}
+.sisternav a{text-decoration:none;border-bottom:1px solid #d5dae2}
+.sisternav a:hover{border-bottom-color:#0a58ca}
+</style>
+<nav class="sisternav" aria-label="More measured upscaling guides">
+<p>More measured guides</p>
+<ul>
+  <li><a href="https://celticgemini001.github.io/upgolab-ai-upscaler-guide/">What upscaling recovers vs invents</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-video-upscaling-limits/">Why video isn't image upscaling</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-upscale-product-photos/">Product shot vs face</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-2k-vs-4k-decision/">2K vs 4K bits-per-pixel</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-upscale-anime-illustration/">Line art and ink coverage</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-old-footage-restoration/">Old footage restoration</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-screen-recording-4k/">Screen recording to 4K</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-thumbnail-4k-master/">4K thumbnail master</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-remove-background-and-upscale/">Cutout and upscale</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-what-nofollow-means/">What rel=nofollow actually does</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-tools/">All guides (index)</a></li>
+</ul>
+</nav>
+</footer>
+</main>
+</body>
+</html>
