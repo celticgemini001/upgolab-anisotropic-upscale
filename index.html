@@ -4,17 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Upscaling One Axis: What Anisotropic Scale Actually Costs</title>
-<meta name="description" content="Measured on a 1080x720 scene with known detail: upscaling only one axis scores 2.2 dB higher than upscaling both. Plus why the extra detail costs 5.8% more bytes at the same CRF, and why splitting a 2x into two passes changes nothing.">
+<meta name="description" content="Measured on a 1080x720 scene with known detail: upscaling only one axis scores 2.2 dB higher than upscaling both. At equal bytes 1.6 dB of that survives, and 8x the bitrate cannot close the remaining gap. Plus why nearest is the most expensive kernel and why splitting a 2x into two passes changes nothing.">
 <link rel="canonical" href="https://celticgemini001.github.io/upgolab-anisotropic-upscale/">
 <meta property="og:type" content="article">
 <meta property="og:title" content="Upscaling One Axis: What Anisotropic Scale Actually Costs">
-<meta property="og:description" content="2.2 dB from axis count, 1.5 dB from kernel choice. Measured, with the negative results included.">
+<meta property="og:description" content="2.2 dB from axis count, 1.5 dB from kernel choice. At equal bytes 1.6 dB survives, and 8x the bitrate buys 0.36 dB. Measured, negative results included.">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"Article",
  "headline":"Upscaling One Axis: What Anisotropic Scale Actually Costs",
  "author":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
  "publisher":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
  "datePublished":"2026-11-15",
+ "dateModified":"2026-11-15",
  "mainEntityOfPage":"https://celticgemini001.github.io/upgolab-anisotropic-upscale/"}
 </script>
 <style>
@@ -56,12 +57,11 @@ that bites when you ship a video instead of a JPEG.</p>
 
 <h2>Why this question is not academic</h2>
 
-<p>Most interpolation code takes two scale factors and most articles assume they are equal.
-They are equal in the resampler — you can pass (2.0, 2.0) or (2.0, 1.0) to anything — but they
-are emphatically not equal in <em>information terms</em>. Each axis carries its own frequency
+<p>Most interpolation code takes two scale factors and most articles assume they are equal. They
+are equal in the resampler — you can pass (2.0, 2.0) or (2.0, 1.0) to anything — but they are
+emphatically not equal in <em>information terms</em>. Each axis carries its own frequency
 budget. If a source lost detail only horizontally, upscaling it vertically is doing work that
-was not needed, and every operation on an image costs something: interpolation smooths, and
-smoothing is irreversible.</p>
+was not needed, and interpolation smooths, which is irreversible.</p>
 
 <p>So the practical question is:</p>
 
@@ -70,17 +70,18 @@ smoothing is irreversible.</p>
 <li>Can you <em>tell from the output</em> which axis was damaged?</li>
 <li>Does it matter once a codec gets involved?</li>
 <li>Is the old "do 2x in two single-axis passes" advice worth anything?</li>
+<li>If the one-axis version costs 5.8% more bytes, does its advantage survive a
+<em>fixed byte budget</em> — and if not, how many bytes would close it?</li>
 </ol>
 
-<p>Four questions, four experiments. Two of them came back negative, and I am reporting those
-as measured rather than dropping them, because a negative result is what stops you from
-optimising the wrong thing for a year.</p>
+<p>Five questions, five experiments. Three come back negative or surprising, and I report them
+as measured, because a negative result is what stops you optimising the wrong thing for a year.</p>
 
 <h2>The test scene: known answer, both axes exercised</h2>
 
 <p>PSNR is only meaningful against a reference that actually contains the detail you are trying
-to reconstruct. So the ground truth is generated at the target size, not upscaled from
-something smaller. It is 1080×720 and deliberately contains structure on both axes:</p>
+to reconstruct, so the ground truth is generated at the target size, not upscaled from
+something smaller. It is 1080×720 and contains structure on both axes:</p>
 
 <ul>
 <li>two low-frequency gradients, one varying in x, one in y, one diagonal;</li>
@@ -91,9 +92,9 @@ measured separately per axis;</li>
 (vertical high frequency only).</li>
 </ul>
 
-<p>Degrading this three ways and reconstructing back to 1080×720 isolates the variable. All
-three reconstructions start from the same pixel budget and end at the same size; the only
-difference is <em>which axis lost the information</em>.</p>
+<p>Degrading this three ways and reconstructing back to 1080×720 isolates the variable: all three
+start from the same pixel budget and end at the same size, and the only difference is <em>which
+axis lost the information</em>.</p>
 
 <pre><code>import numpy as np
 from PIL import Image
@@ -126,16 +127,15 @@ for label, s in srcs.items():
 </table>
 <p class="meta">PSNR in dB against the 1080×720 ground truth, higher is better.</p>
 
-<p>Read the gap between rows, then the gap along a row. Rows: neighbour (28.75) to Lanczos
-(30.27) is <strong>+1.52 dB</strong>. Columns: both-axes to single-axis, at any kernel, is
-<strong>+2.2 to +2.4 dB</strong>. The axis decision is worth more than picking the best
-resampler in the world — and unlike the kernel, you often cannot choose it, because it is
-set by the delivery format.</p>
+<p>Read the gap between rows, then along a row. Rows: neighbour (28.75) to Lanczos (30.27) is
+<strong>+1.52 dB</strong>. Columns: both-axes to single-axis, at any kernel, is
+<strong>+2.2 to +2.4 dB</strong>. The axis decision is worth more than picking the best resampler
+in the world — and unlike the kernel, you often cannot choose it, because the delivery format
+sets it.</p>
 
-<p>Notice also that horizontal-only and vertical-only land within 0.1 dB of each other
-(32.50 vs 32.60 at Lanczos). The scene has detail on both axes, so this is a fair test: the
-benefit comes from leaving <em>one axis untouched</em>, not from the scene happening to favour
-one direction.</p>
+<p>Horizontal-only and vertical-only land within 0.1 dB of each other (32.50 vs 32.60 at
+Lanczos). The scene has detail on both axes, so this is a fair test: the benefit comes from
+leaving <em>one axis untouched</em>, not from the scene favouring one direction.</p>
 
 <h2>Experiment 2 — can you tell which axis was damaged?</h2>
 
@@ -154,27 +154,24 @@ than horizontal, because of those 8 horizontal strokes.</p>
 </table>
 <p class="meta">Gradient means are 0–255 units; edge positions are sub-pixel centroids of the gradient profile.</p>
 
-<p>The ratio moves in the direction you would predict and by about the same magnitude in both
-directions: 0.862 when vertical detail was destroyed, 1.071 when horizontal was. That is a
-7–12% tilt away from the 0.956 baseline, which is small in absolute terms but one-directional
-and reproducible. A symmetric upscale leaves the ratio alone (0.960).</p>
+<p>The ratio moves in the predicted direction and by about the same magnitude both ways: 0.862
+when vertical detail was destroyed, 1.071 when horizontal was — a 7–12% tilt away from the 0.956
+baseline, small in absolute terms but one-directional and reproducible. A symmetric upscale
+leaves the ratio alone (0.960).</p>
 
-<p>Two things surprised me here, and both are worth knowing before you trust a "sharpness"
-number:</p>
+<p>Two things surprised me here, both worth knowing before you trust a "sharpness" number:</p>
 
 <ol>
 <li><strong>Both-axes reconstruction has <em>more</em> gradient energy than the ground truth</strong>
 — 2.106 and 2.193 against 1.641 and 1.717, roughly +28%. Lanczos overshoot does not recover
 detail; it manufactures contrast at the reconstruction edges. Any metric built on gradient
-magnitude will rank this smoothed-then-overshot image as "sharper" than the real thing. This
-is the same trap documented on the <a href="https://celticgemini001.github.io/upgolab-ai-upscaler-guide/">main
-upscaler guide</a>, and it is why the table above reports the ratio rather than the absolute
-values.</li>
+magnitude ranks this smoothed-then-overshot image as "sharper" than the real thing. That trap is
+documented on the <a href="https://celticgemini001.github.io/upgolab-ai-upscaler-guide/">main
+upscaler guide</a>, and it is why the table reports the ratio rather than absolute values.</li>
 <li><strong>Edge position does not move.</strong> 406.60 px in ground truth, 406.44 px after
-reconstruction — one-sixth of a pixel, and identical for both one-axis cases. Single-axis
-interpolation on this scene does not shift geometry, so the fear that stretching one axis
-"pulls" the picture sideways is not supported. If you see a shift in production, it is
-coming from somewhere else in the chain, not from the resampler.</li>
+reconstruction — one-sixth of a pixel, identical for both one-axis cases. Single-axis
+interpolation does not shift geometry here, so the fear that stretching one axis "pulls" the
+picture sideways is not supported. A shift in production comes from elsewhere in the chain.</li>
 </ol>
 
 <h2>Experiment 3 — the better image costs more bytes</h2>
@@ -193,24 +190,21 @@ to H.264 with libx264 at CRF 20, one frame each at 1080×720:</p>
 <p class="meta">x264, CRF 20, preset medium, yuv420p. PSNR measured after decode, against the ground truth.</p>
 
 <p>+1.7 dB of quality costs <strong>+5.8% bytes</strong> (19,668 vs 18,597) at an identical CRF
-setting. That is not a bug or a rounding artefact — it is entropy. An image with more genuine
-detail has more to encode, and CRF holds quality per pixel rather than size per file, so a
-cleaner input produces a bigger file. The smoothed both-axes version is cheaper precisely
-because it is emptier.</p>
+setting. That is not a bug — it is entropy. An image with more genuine detail has more to
+encode, and CRF holds quality per pixel rather than size per file, so a cleaner input produces
+a bigger file. The smoothed both-axes version is cheaper precisely because it is emptier.</p>
 
 <div class="callout">
-<p><strong>The practical consequence.</strong> If you have a byte budget and you are choosing
-between a stretched axis and a squeezed one, the quality gain is real but you will pay for it
-in bitrate. Decide which constraint is binding <em>before</em> you upscale, not after you look
-at the file size and assume something went wrong.</p>
+<p><strong>The practical consequence.</strong> If you have a byte budget, the quality gain is
+real but you pay for it in bitrate. Decide which constraint is binding <em>before</em> you
+upscale, not after you look at the file size.</p>
 </div>
 
 <h2>Experiment 4 — "do it in two single-axis passes" changes nothing</h2>
 
-<p>There is long-standing advice that a 2× upscale should be performed as horizontal-then-vertical
-(or the reverse) because two 1D passes are cheaper and "cleaner" than one 2D kernel. Two 1D
-passes are indeed cheaper computationally — that part is trivially true — but the quality claim
-is what interests me.</p>
+<p>Long-standing advice says a 2× upscale should run horizontal-then-vertical (or the reverse)
+because two 1D passes are cheaper and "cleaner" than one 2D kernel. The cost claim is trivially
+true; the quality claim is what interests me.</p>
 
 <pre><code>small = img.resize((W // 2, H // 2), Image.LANCZOS)          # degrade
 a = small.resize((W, H), Image.LANCZOS)                       # one pass
@@ -227,15 +221,97 @@ c = small.resize((W // 2, H), Image.LANCZOS).resize((W, H), Image.LANCZOS)  # ve
 </table>
 <p class="meta">The real photo is a 1080×1620 JPEG, degraded to half size and reconstructed. Same code path for all three.</p>
 
-<p>On the synthetic scene the three results are identical to three decimal places. On the real
-photograph the largest difference is <strong>0.006 dB</strong> — far below the level at which
-anyone could see it, and in the direction that favours the <em>more expensive</em> arrangement
-by an amount indistinguishable from rounding. The pixel-difference census agrees: 59.68% of
-pixels differ by more than 2 levels from the original in all three cases, max error 15, 15, 14.</p>
+<p>On the synthetic scene the three results are identical to three decimals. On the real
+photograph the largest difference is <strong>0.006 dB</strong> — far below visibility, in the
+direction that favours the <em>more expensive</em> arrangement by an amount indistinguishable
+from rounding. The pixel-difference census agrees: 59.68% of pixels differ by more than 2 levels
+from the original in all three cases, max error 15, 15, 14.</p>
 
-<p>So: use two passes if you are writing a fast resampler and want the speed. Do not use them
-expecting a quality improvement. On this evidence there is none, and the folklore that made
+<p>So use two passes if you are writing a fast resampler and want the speed. Do not use them
+expecting a quality improvement — on this evidence there is none, and the folklore that made
 you restructure your pipeline bought you nothing.</p>
+
+<h2>Experiment 5 — at equal bytes the advantage survives, and bitrate cannot buy it back</h2>
+
+<p>Experiment 3 has an obvious hole: CRF holds <em>quality per pixel</em>, so the clean
+reconstruction got more bytes (19,668 vs 18,597). Its +1.7 dB came bundled with +5.8% more
+data. A fair test against a delivery budget spends the <em>same</em> bytes on all three, which
+means a different CRF for each — found by binary search to ±0.5%:</p>
+
+<pre><code>def hit_bytes(arr, target, lo=4.0, hi=45.0):
+    """Binary-search CRF until |size - target| / target &lt;= 0.5%."""
+    for _ in range(18):
+        mid = 0.5 * (lo + hi)
+        size, psnr_after = enc_bytes(arr, mid)      # libx264, medium, yuv420p, 1 frame
+        if abs(size - target) / target &lt;= 0.005:
+            return mid, size, psnr_after
+        lo, hi = (mid, hi) if size &gt; target else (lo, mid)
+</code></pre>
+
+<table>
+<thead><tr><th>reconstruction</th><th>CRF needed</th><th>file bytes</th><th>PSNR at CRF 20</th><th>PSNR at equal bytes</th><th>change</th></tr></thead>
+<tbody>
+<tr><td>both axes 2×</td><td class="num">20.02</td><td class="num">18,625</td><td class="num">29.55</td><td class="num">29.52</td><td class="num">−0.03</td></tr>
+<tr><td>horizontal only 2×</td><td class="num">20.62</td><td class="num">18,657</td><td class="num">31.07</td><td class="num">31.01</td><td class="num">−0.06</td></tr>
+<tr><td>vertical only 2×</td><td class="num">20.70</td><td class="num">18,625</td><td class="num">31.25</td><td class="num">31.12</td><td class="num">−0.13</td></tr>
+</tbody>
+</table>
+<p class="meta">Budget = 18,597 bytes. Target size held to ±0.5%. PSNR measured after decode against the 1080×720 ground truth.</p>
+
+<p>The axis advantage is <strong>structural, not monetary</strong>: 1.60 dB of the original
+1.70 dB survives at equal size — 94% of it. The correction costs the one-axis version
+<em>four times</em> as much PSNR (−0.13 vs −0.03 dB), because it must be encoded more
+conservatively to fit. The 5.8% byte penalty is a smaller tax than the smooth image pays for
+being smooth: the two-axis version cannot convert its cheapness into quality, because it
+already spent it removing detail.</p>
+
+<p>So could bitrate close the gap anyway? Give the two-axis reconstruction a bigger budget:</p>
+
+<table>
+<thead><tr><th>byte budget (× base)</th><th>both-axes CRF</th><th>PSNR reached</th><th>bilinear CRF</th><th>bilinear PSNR</th></tr></thead>
+<tbody>
+<tr><td>1× (18,597 B)</td><td class="num">19.92</td><td class="num">29.53</td><td class="num">18.58</td><td class="num">28.73</td></tr>
+<tr><td>2× (37,194 B)</td><td class="num">12.24</td><td class="num">29.81</td><td class="num">10.91</td><td class="num">28.94</td></tr>
+<tr><td>4× (74,388 B)</td><td class="num">6.97</td><td class="num">29.86</td><td class="num">6.20</td><td class="num">28.98</td></tr>
+<tr><td>8× (148,776 B)</td><td class="num">2.27</td><td class="num">29.89</td><td class="num">1.76</td><td class="num">29.00</td></tr>
+<tr><td>PNG, no codec</td><td class="num">—</td><td class="num">30.27</td><td class="num">—</td><td class="num">—</td></tr>
+</tbody>
+</table>
+<p class="meta">CRF chosen per budget so the file fills 99–100% of it. Vertical-only at 1× = 31.16 dB (CRF 20.71) for comparison.</p>
+
+<p><strong>Eight times the bytes buys 0.36 dB</strong>, and 1.19 Mbit for a single 1080×720
+frame still lands at 29.89 dB — 0.4 dB below the no-codec PNG of that reconstruction, and 1.3 dB
+below the one-axis version at one eighth the rate. You cannot pay your way out of a blur: the
+bits that would carry the missing high frequency do not exist, so x264 spends an enormous rate
+encoding a smooth ramp with more and more precision.</p>
+
+<p>The near-lossless floor confirms the gap is not a codec artefact:</p>
+
+<table>
+<thead><tr><th>operating point</th><th>both-axes bytes</th><th>PSNR</th><th>one-axis bytes</th><th>PSNR</th><th>gap</th></tr></thead>
+<tbody>
+<tr><td>CRF 16</td><td class="num">25,690</td><td class="num">29.74</td><td class="num">27,031</td><td class="num">31.49</td><td class="num">+1.76</td></tr>
+<tr><td>CRF 10</td><td class="num">48,120</td><td class="num">29.83</td><td class="num">48,245</td><td class="num">31.67</td><td class="num">+1.84</td></tr>
+<tr><td>CRF 0</td><td class="num">192,507</td><td class="num">29.91</td><td class="num">182,903</td><td class="num">31.78</td><td class="num">+1.88</td></tr>
+<tr><td>PNG (no codec)</td><td class="num">—</td><td class="num">30.27</td><td class="num">—</td><td class="num">32.60</td><td class="num">+2.33</td></tr>
+</tbody>
+</table>
+<p class="meta"><code>-crf 0</code> and <code>-qp 0</code> produced byte-identical files (192,507 B), as they should. The residual 0.36 dB from PNG to CRF 0 is yuv420p subsampling, not the quantiser.</p>
+
+<p>The gap is <em>narrowest</em> at the loosest setting (+1.76 dB at CRF 16) and <em>widest</em>
+with no codec at all (+2.33 dB) — the opposite of what "the codec is hiding the difference"
+predicts. The two-axis image loses nothing extra to compression; it enters the encoder with
+less detail and the encoder correctly does not invent any.</p>
+
+<div class="callout">
+<p><strong>Unexpected: nearest is the most expensive kernel.</strong> At CRF 20 it is the
+<em>largest</em> file — 21,175 bytes against Lanczos at 18,597, +13.9% — for 1.04 dB less
+quality. Blocky output is full of hard 2-pixel steps, and hard steps are expensive to encode,
+so the "fast" resampler hands the codec a harder job. Full ladder: nearest 21,175 B / 28.51 dB,
+bicubic 17,836 B / 29.37 dB, bilinear 16,636 B / 28.63 dB, Lanczos 18,597 B / 29.55 dB. At
+equal bytes it settles into bilinear 28.73, bicubic 29.42, Lanczos 29.52 — a 0.10 dB spread
+between the top two, which is not worth arguing about. The 1.6 dB axis difference is.</p>
+</div>
 
 <h2>What to actually do</h2>
 
@@ -249,29 +325,32 @@ behind Lanczos and the gap is consistent at every axis count measured here.</li>
 sharpened or overshot image beats the ground truth on |dx| by 28% while being visibly softer.
 The ratio |dx|/|dy| is stable to about 1% and moves 7–12% when one axis is damaged.</li>
 <li><strong>Budget bytes after the upscale, not before.</strong> A cleaner input raises the
-encoded size at fixed CRF. 5.8% in this test; assume the same order of magnitude on your own
-material.</li>
+encoded size at fixed CRF. 5.8% in this test; assume the same order of magnitude on yours.</li>
 <li><strong>Do not split the pass for quality.</strong> Measured difference: ≤0.006 dB. Split
 it only for speed.</li>
+<li><strong>Do not raise bitrate to fix a soft axis.</strong> Eight times the bytes bought
+0.36 dB and still finished 1.3 dB short of the one-axis version at one eighth the rate. Fix
+the geometry before the encoder; the encoder can only preserve what reaches it.</li>
+<li><strong>Compare at equal bytes, not at equal CRF.</strong> CRF charges the cleaner image
+more, making a real gain look like a byte regression. Hold the budget fixed and search the CRF.</li>
 </ol>
 
-<p>The wider point is the one that keeps showing up in these measurements: the number in the
-tool's UI ("4×") describes an output size, not a recovered amount. Which axis you scaled, and
-whether the source ever had detail there, decides the result — the multiplier on the label
-does not.</p>
+<p>The wider point keeps showing up in these measurements: the number in the tool's UI ("4×")
+describes an output size, not a recovered amount. Which axis you scaled, and whether the source
+ever had detail there, decides the result — the multiplier on the label does not.</p>
 
-<p>If you want to run this on your own file rather than my synthetic scene, the loop is the
-same three lines: degrade a known-good version of your footage along one axis, reconstruct it,
-and compare against the original instead of against the upscale you were about to ship. It
-takes about a minute and it will tell you whether the axis you were planning to stretch is the
-one that actually went soft — or whether, like <a href="https://upgolab.com">the browser
-upscaler at upgolab.com</a>, you should be re-running the whole frame rather than stretching a
-single direction of it.</p>
+<p>To run this on your own file rather than my synthetic scene: degrade a known-good version
+along one axis, reconstruct it, and compare against the original instead of against the upscale
+you were about to ship. It takes a minute and tells you whether the axis you planned to stretch
+is the one that actually went soft — or whether, like <a href="https://upgolab.com">the browser
+upscaler at upgolab.com</a>, you should re-run the whole frame rather than stretch one direction
+of it.</p>
 
 </article>
 <footer>
 Published by UpgoLAB — AI photo and short-video upscaling in the browser. Measured with numpy
-and ffmpeg 6.1.1 on a 1080×720 synthetic reference plus a 1080×1620 JPEG; 5 tables, 2 negative results.
+and ffmpeg 6.1.1 on a 1080×720 synthetic reference plus a 1080×1620 JPEG; 7 tables, 3 negative
+or unexpected results, all reported as measured.
 <style>
 .sisternav{margin:2rem 0 0;padding-top:1.2rem;border-top:1px solid #e2e5ea}
 .sisternav p{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;
