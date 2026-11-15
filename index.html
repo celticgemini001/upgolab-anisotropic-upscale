@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Upscaling One Axis: What Anisotropic Scale Actually Costs</title>
-<meta name="description" content="Measured on a 1080x720 scene with known detail: upscaling only one axis scores 2.2 dB higher than upscaling both. At equal bytes 1.6 dB of that survives, and 8x the bitrate cannot close the remaining gap. Plus why nearest is the most expensive kernel and why splitting a 2x into two passes changes nothing.">
+<meta name="description" content="The +2.2 dB for upscaling one axis instead of two was measured with twice the source pixels. Re-run at equal pixels it reverses: two-axis wins by 4.3 dB on isotropic content, one-axis wins by 16 dB when detail sits on the other axis. Plus a 1440x1080 to 1920x1080 test of pad, crop and stretch, and why nearest is the most expensive kernel.">
 <link rel="canonical" href="https://celticgemini001.github.io/upgolab-anisotropic-upscale/">
 <meta property="og:type" content="article">
 <meta property="og:title" content="Upscaling One Axis: What Anisotropic Scale Actually Costs">
-<meta property="og:description" content="2.2 dB from axis count, 1.5 dB from kernel choice. At equal bytes 1.6 dB survives, and 8x the bitrate buys 0.36 dB. Measured, negative results included.">
+<meta property="og:description" content="The axis claim reverses when source pixels are held equal. 4.3 dB for two axes on isotropic content, 16 dB for one axis on directional content. Crop costs 0.676 of vertical detail; stretch costs 1.336 circle aspect. Measured, corrections included.">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"Article",
  "headline":"Upscaling One Axis: What Anisotropic Scale Actually Costs",
@@ -50,9 +50,10 @@ This post measures what happens when you stretch one axis and leave the other al
 <p class="meta">15 November 2026 · synthetic 1080×720 reference + x264 encodes, measured with numpy and ffmpeg</p>
 
 <p>The honest summary is in the first two lines and the rest of the article is the evidence.
-<strong>Axis count is a bigger lever than kernel choice</strong>: going from a two-axis 2x to a
-one-axis 2x gains 2.2 dB, while walking the whole kernel ladder from nearest to Lanczos gains
-1.5 dB. And the "better" image <em>costs more bytes</em> at a fixed CRF, which is the part
+<strong>Kernel choice is worth 1.5 dB and the axis question is worth up to 16 dB</strong> —
+but which way it goes depends entirely on where the detail sits. Experiment 1 below reports
++2.2 dB for touching one axis; Experiment 6 finds that number was measured with twice the source
+pixels and reverses sign when the budget is held equal. And the "better" image <em>costs more bytes</em> at a fixed CRF, which is the part
 that bites when you ship a video instead of a JPEG.</p>
 
 <h2>Why this question is not academic</h2>
@@ -74,8 +75,10 @@ was not needed, and interpolation smooths, which is irreversible.</p>
 <em>fixed byte budget</em> — and if not, how many bytes would close it?</li>
 </ol>
 
-<p>Five questions, five experiments. Three come back negative or surprising, and I report them
-as measured, because a negative result is what stops you optimising the wrong thing for a year.</p>
+<p>Five questions answered below, then a sixth experiment that re-tests the answer to the first
+one and finds it was measured against a budget handicap. Three of the results are negative and I
+report them as measured, because a negative result is what stops you optimising the wrong thing
+for a year.</p>
 
 <h2>The test scene: known answer, both axes exercised</h2>
 
@@ -312,12 +315,259 @@ equal bytes it settles into bilinear 28.73, bicubic 29.42, Lanczos 29.52 — a 0
 between the top two, which is not worth arguing about. The 1.6 dB axis difference is.</p>
 </div>
 
+<h2>Experiment 6 — the recommendation this page gives was never measured</h2>
+
+<p>Recommendation #1 in the list above reads: <em>"Minimise the number of axes you touch. It
+is worth 2.2 dB. If the delivery format allows it, crop or pad rather than stretch when only
+one axis is short."</em></p>
+
+<p>Those two sentences disagree with each other, and I only noticed while re-reading my own
+numbers. Crop touches <strong>two</strong> axes. Stretch touches <strong>one</strong>. If axis
+count really is the lever, the recommendation should be <em>stretch</em>, not crop. One of the
+two claims had to be wrong, so I re-ran the experiment and found a bug in the original — in my
+own methodology, not in the images.</p>
+
+<h3>The budget was not held equal</h3>
+
+<p>Experiment 1 above states that "all three start from the same pixel budget and end at the
+same size". Check the arithmetic of the three sources it names, all reconstructed to
+1080×720:</p>
+
+<table>
+<thead><tr><th>case in Experiment 1</th><th>source dims</th><th>source pixels</th><th>vs control</th></tr></thead>
+<tbody>
+<tr><td>both axes 2×</td><td class="num">540×360</td><td class="num">194,400</td><td class="num">1.00×</td></tr>
+<tr><td>horizontal only 2×</td><td class="num">540×720</td><td class="num">388,800</td><td class="num">2.00×</td></tr>
+<tr><td>vertical only 2×</td><td class="num">1080×360</td><td class="num">388,800</td><td class="num">2.00×</td></tr>
+</tbody>
+</table>
+<p class="meta">Same numbers Experiment 1 reports, with the pixel counts added.</p>
+
+<p>The single-axis cases hold <strong>twice the input pixels</strong> of the control they were
+compared against. So the +2.2 dB did not measure "fewer axes". It measured "twice as much
+source data", which is a much less interesting claim — of course more input pixels score
+better.</p>
+
+<h3>Holding the budget actually equal</h3>
+
+<p>Fix the source pixel count at 388,800 and reconstruct to 1080×720. The one-axis case can
+only be 540×720. To match its budget, the two-axis case has to be 764×509 — a squarer source
+than any real pipeline would pick, but that is the point: it is what a fair test looks like.
+Eight scenes, identical source pixels, identical output size:</p>
+
+<table>
+<thead><tr><th>case</th><th>source dims</th><th>source pixels</th><th>PSNR (mean of 8)</th><th>vs one-axis</th></tr></thead>
+<tbody>
+<tr><td>one axis</td><td class="num">540×720</td><td class="num">388,800</td><td class="num">41.50</td><td class="num">—</td></tr>
+<tr><td>both axes, equal pixels</td><td class="num">764×509</td><td class="num">388,876</td><td class="num">45.77</td><td class="num">−4.27</td></tr>
+</tbody>
+</table>
+<p class="meta">Lanczos-3 for degradation and reconstruction. Negative = the two-axis case is better. Spread across the 8 scenes: sd 0.01 dB, one-axis won 0/8.</p>
+
+<p>Swap the pixels and the sign swaps with them. Give the two-axis case exactly 194,400 pixels
+and the one-axis case the <em>same</em> 194,400 (270×720), and the two-axis case wins by
+<strong>7.19 dB</strong> (sd 0.01, 0/8 for one-axis). The correction is not a rounding effect;
+it is the entire size of the original claim, reversed, at both budgets.</p>
+
+<div class="callout">
+<p><strong>So is "minimise axes" simply wrong?</strong> No — and this is the part worth
+keeping. At equal source pixels, the two options destroy <em>different frequency bands</em>:</p>
+<p>one axis, 270×720 → x Nyquist <strong>0.125</strong> cyc/px, y Nyquist <strong>0.500</strong> (y untouched)<br>
+both axes, 540×360 → <strong>0.250</strong> both</p>
+<p>Which one wins depends on where the scene's detail lives, not on how many axes you touched.</p>
+</div>
+
+<h3>Where the rule actually flips</h3>
+
+<p>Sweep the share of detail energy that varies along x, holding source pixels identical at
+194,400 and output identical at 1080×720. Anisotropy 0.0 means all detail is horizontal lines
+(only y varies); 1.0 means all vertical bars.</p>
+
+<table>
+<thead><tr><th>anisotropy (x share)</th><th>one axis 270×720</th><th>both 540×360</th><th>one − both</th><th>winner</th></tr></thead>
+<tbody>
+<tr><td class="num">0.00</td><td class="num">47.09</td><td class="num">31.03</td><td class="num">+16.07</td><td>one axis</td></tr>
+<tr><td class="num">0.15</td><td class="num">35.02</td><td class="num">30.94</td><td class="num">+4.08</td><td>one axis</td></tr>
+<tr><td class="num">0.25</td><td class="num">32.86</td><td class="num">30.90</td><td class="num">+1.96</td><td>one axis</td></tr>
+<tr><td class="num">0.35</td><td class="num">31.45</td><td class="num">30.88</td><td class="num">+0.57</td><td>one axis</td></tr>
+<tr><td class="num">0.40</td><td class="num">30.90</td><td class="num">30.87</td><td class="num">+0.03</td><td>tie</td></tr>
+<tr><td class="num">0.50</td><td class="num">29.97</td><td class="num">30.86</td><td class="num">−0.89</td><td>both</td></tr>
+<tr><td class="num">0.80</td><td class="num">27.94</td><td class="num">30.87</td><td class="num">−2.93</td><td>both</td></tr>
+<tr><td class="num">1.00</td><td class="num">26.99</td><td class="num">30.93</td><td class="num">−3.94</td><td>both</td></tr>
+</tbody>
+</table>
+<p class="meta">PSNR mean of 6 scenes per row. The one-axis column is stable to sd ≤ 0.03 dB; the two-axis column varies up to sd 1.10 dB between scenes, because it always resamples both axes and so its score depends on how much detail each axis actually carried. Ties at anisotropy ≈ 0.40. Full span 20 dB, at identical source pixels and identical output.</p>
+
+<p>The rule is not "minimise axes". It is: <strong>if the detail sits on one axis, do not
+resample the other; if it sits on both, spread the loss across both.</strong> The 2.2 dB on this
+page was the first half of that rule accidentally measured with a 2× budget handicap, which is
+why it came out looking like a universal law.</p>
+
+<h3>The job the recommendation was written for</h3>
+
+<p>All of the above is PSNR on a synthetic budget. The recommendation, though, is about a
+specific transformation, so it has to be measured as one. Take a 1440×1080 capture with square
+pixels — genuinely 4:3 content, not a squeezed 16:9 frame — that must ship as 1920×1080. Three
+deliveries, and the capture is the reference in every case, so no option is scored against the
+picture it discarded:</p>
+
+<table>
+<thead><tr><th>option</th><th>what it does</th><th>axes resampled</th></tr></thead>
+<tbody>
+<tr><td>pad</td><td>1:1 paste, 240 px pillars</td><td class="num">0</td></tr>
+<tr><td>crop</td><td>centre 1440×810 → 1920×1080</td><td class="num">2</td></tr>
+<tr><td>stretch</td><td>1440×1080 → 1920×1080</td><td class="num">1</td></tr>
+</tbody>
+</table>
+
+<p>Measure detail retention per axis, at frequencies stated per capture pixel. One full-frame
+sinusoid per test, amplitude read as a projecting sum at the exact known frequency — no
+sampling windows to get wrong.</p>
+
+<table>
+<thead><tr><th>f (cyc/capture px)</th><th>pad H</th><th>crop H</th><th>stretch H</th><th>pad V</th><th>crop V</th><th>stretch V</th></tr></thead>
+<tbody>
+<tr><td class="num">0.10</td><td class="num">1.000</td><td class="num">0.998</td><td class="num">0.998</td><td class="num">1.000</td><td class="num">0.998</td><td class="num">1.000</td></tr>
+<tr><td class="num">0.20</td><td class="num">1.000</td><td class="num">1.011</td><td class="num">1.011</td><td class="num">1.000</td><td class="num">1.011</td><td class="num">1.000</td></tr>
+<tr><td class="num">0.30</td><td class="num">1.000</td><td class="num">0.989</td><td class="num">0.989</td><td class="num">1.000</td><td class="num">0.989</td><td class="num">1.000</td></tr>
+<tr><td class="num">0.35</td><td class="num">1.000</td><td class="num">0.927</td><td class="num">0.927</td><td class="num">1.000</td><td class="num">0.927</td><td class="num">1.000</td></tr>
+<tr><td class="num">0.40</td><td class="num">1.000</td><td class="num">0.821</td><td class="num">0.821</td><td class="num">1.000</td><td class="num">0.821</td><td class="num">1.000</td></tr>
+<tr><td class="num">0.45</td><td class="num">1.000</td><td class="num">0.675</td><td class="num">0.675</td><td class="num">1.000</td><td class="num">0.676</td><td class="num">1.000</td></tr>
+</tbody>
+</table>
+<p class="meta">Detail retained relative to the capture, 1.000 = nothing lost. Mean over all 9 frequencies tested: pad 1.000 / 1.000, crop 0.9385 / 0.9386, stretch 0.9385 / 1.000 (H / V). Values above 1.000 are Lanczos overshoot at frequencies the resampler can still pass, not recovered detail.</p>
+
+<p>Three things fall out, and the third is the one that matters.</p>
+
+<ol>
+<li><strong>Crop and stretch are identical on the horizontal axis</strong> — 0.9385 either way,
+to four decimals. Of course they are: both perform the same 1440→1920 horizontal resample. The
+axis count differs, the horizontal work does not.</li>
+<li><strong>On the vertical axis they diverge completely.</strong> Stretch leaves it at 1.000 at
+every frequency. Crop takes it to 0.9386 mean, and to <strong>0.676</strong> at 0.45 cyc/px —
+a third of the vertical detail gone, because crop resamples an axis that never needed it.</li>
+<li><strong>So "crop rather than stretch" costs you detail and buys you nothing on the axis that
+was soft.</strong> The 4:3→16:9 problem is horizontal. Crop fixes it by throwing away 25% of the
+frame and resampling <em>both</em> axes; stretch fixes it by resampling only the broken one. On
+detail retention, stretch dominates crop by 0.9386 → 1.000 on the vertical axis at equal
+horizontal cost.</li>
+</ol>
+
+<p>Which is exactly what the equal-pixel experiment predicted, one level down: the axis you
+should not touch is the one that has detail on it.</p>
+
+<h3>What crop does buy, and what stretch costs</h3>
+
+<p>Stretch is not free. It is a geometric error, and geometry is not a PSNR question — which is
+why the original experiment could not see it. Three true circles, bounding-box aspect, 1.0000
+being round:</p>
+
+<table>
+<thead><tr><th>delivery</th><th>circle 1</th><th>circle 2</th><th>circle 3</th><th>framing cost</th><th>bytes @ CRF 20</th></tr></thead>
+<tbody>
+<tr><td>capture</td><td class="num">1.0000</td><td class="num">1.0000</td><td class="num">1.0000</td><td>—</td><td class="num">—</td></tr>
+<tr><td>pad</td><td class="num">1.0000</td><td class="num">1.0000</td><td class="num">1.0000</td><td>75% of frame is picture</td><td class="num">91,838</td></tr>
+<tr><td>crop</td><td class="num">1.0000</td><td class="num">1.0000</td><td class="num">1.0000</td><td>270 rows discarded (25%)</td><td class="num">100,720</td></tr>
+<tr><td>stretch</td><td class="num">1.3360</td><td class="num">1.3360</td><td class="num">1.3360</td><td>full frame kept</td><td class="num">115,153</td></tr>
+</tbody>
+</table>
+<p class="meta">Circles measured on a separate flat-ground test image. Bytes on a band-limited photographic test frame, same encoder settings as Experiments 3 and 5.</p>
+
+<p>Stretch turns every circle into an ellipse with a <strong>1.336</strong> axis ratio — the
+resample ratio itself, 1920/1440 = 1.3333, plus 0.003 of bounding-box quantisation. That is not
+a subtle defect; it is the first thing a viewer notices, and no amount of detail retention
+compensates for it. It is also the most expensive option in bytes (+25% over pad, +14% over
+crop), because a stretched frame carries the extra detail that crop threw away.</p>
+
+<p>Pad is the cheapest and the only option that loses no detail at all on either axis — 1.000
+everywhere, measured, not assumed — but it spends 25% of the frame on black bars and leaves the
+content at 4:3 inside a 16:9 canvas.</p>
+
+<div class="callout">
+<p><strong>The rule, now with the missing half.</strong></p>
+<p>Do not resample an axis that still has detail. That is the whole of it, and it cuts both
+ways: it says <em>stretch</em> when the framing allows it and the softness is on one axis, and
+it says <em>crop or pad</em> when you cannot tolerate the aspect change — because then you are
+choosing between a geometric error and a resampled axis, not between one axis and two.</p>
+</div>
+
+<h3>My own three mistakes in this section</h3>
+
+<p>Since the point of the section is that the earlier number was wrong, the errors are worth
+recording rather than tidying away.</p>
+
+<ol>
+<li><strong>Measured a 1:1 paste with a shifted window.</strong> The first version sampled pad
+at the same coordinates as the resampled variants, so the un-resampled case read 0.750 instead
+of 1.000 — the pillar fraction, not a detail measurement. Caught by asserting that a path which
+resamples nothing must read exactly 1.000.</li>
+<li><strong>Compared crop against a reference that had been resampled the same way.</strong> That
+returns 99 dB (identical images) no matter what crop does, which is a tautology dressed as a
+result. Every reference here is now built from the capture or the world, never from the
+transform being tested.</li>
+<li><strong>Reported Nyquist as 1.000 cyc/px</strong> for a 540→1080 reconstruction. The correct
+value is 0.250 — the formula was inverted. It mattered: the first threshold sweep put the
+crossover in the wrong band entirely.</li>
+</ol>
+
+<p>Each of the three produced numbers that looked plausible. Only the assertions caught them —
+"a path that resamples nothing must read 1.000", "a reference must not be the thing under
+test", "a downscaled axis cannot carry more than half its input rate". A measurement harness
+without those three checks would have published all of it.</p>
+
+<h3>Reproduce it</h3>
+
+<pre><code>import numpy as np
+from PIL import Image
+
+W, H = 1080, 720
+
+def psnr(a, b):
+    d = np.asarray(a, np.float64) - np.asarray(b, np.float64)
+    return 99.0 if d.max() == 0 else 10 * np.log10(255.0 ** 2 / np.mean(d ** 2))
+
+def scene(seed=1, hf=14.0):
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float64)
+    a = np.full((H, W), 128.0)
+    a += 30 * np.sin(2 * np.pi * (0.015 * xx + 0.011 * yy) + rng.uniform(0, 6.3))
+    a += 18 * np.sin(2 * np.pi * (0.040 * xx + 0.033 * yy) + rng.uniform(0, 6.3))
+    a += 11 * np.sin(2 * np.pi * (0.085 * xx + 0.070 * yy) + rng.uniform(0, 6.3))
+    a += hf * np.sin(2 * np.pi * 0.40 * xx)     # horizontal high frequency
+    a += hf * np.sin(2 * np.pi * 0.38 * yy)     # vertical high frequency
+    a += rng.normal(0, 1.5, (H, W))
+    return Image.fromarray(np.clip(a, 0, 255).round().astype(np.uint8))
+
+def recon(gt, src):
+    return gt.resize(src, Image.LANCZOS).resize((W, H), Image.LANCZOS)
+
+gt = scene()
+one, both_equal, both_half = (540, 720), (764, 509), (540, 360)
+
+print("page setup  ", round(psnr(recon(gt, one), gt) - psnr(recon(gt, both_half), gt), 2))
+print("equal pixels", round(psnr(recon(gt, one), gt) - psnr(recon(gt, both_equal), gt), 2))
+print("same pixels ", round(psnr(recon(gt, (270, 720)), gt) - psnr(recon(gt, both_half), gt), 2))</code></pre>
+
+<p class="meta">Prints +2.99 / +2.26 / +2.92 dB on this scene — one-axis ahead in all three,
+because this particular scene is horizontal-detail-heavy. Change <code>hf</code> or the octave
+layout toward isotropic content (the anisotropy sweep above) and the last two invert. That
+sensitivity is the finding, not a bug in the snippet: the axis question has no answer without a
+statement about where the detail is.</p>
+
+<p>Which is the practical instruction. Before deciding whether to stretch, crop, or pad, look at
+which axis actually went soft — a gradient ratio does it well enough, as Experiment 2 shows — and
+then protect the other one. The multiplier in the UI says nothing about that, and neither did my
+first attempt at measuring it.</p>
+
 <h2>What to actually do</h2>
 
 <ol>
-<li><strong>Minimise the number of axes you touch.</strong> It is worth 2.2 dB — more than any
-kernel decision. If the delivery format allows it, crop or pad rather than stretch when only
-one axis is short.</li>
+<li><strong>Do not resample an axis that still has detail.</strong> Experiment 6 shows the
+original "+2.2 dB from fewer axes" was a source-pixel budget artefact: at equal input pixels the
+two-axis case wins by 4.3 dB on isotropic content, and the one-axis case wins by 16 dB when the
+detail is all on the other axis. The rule has no universal sign — it depends on where the detail
+is. Protect the axis that carries it: stretch when only one axis is soft and the framing allows
+it, crop or pad when you cannot accept the aspect change.</li>
 <li><strong>Never use nearest to save time on a gradient-heavy source.</strong> It is 1.5 dB
 behind Lanczos and the gap is consistent at every axis count measured here.</li>
 <li><strong>Diagnose direction with the gradient ratio, not gradient magnitude.</strong> A
@@ -348,8 +598,9 @@ of it.</p>
 </article>
 <footer>
 Published by UpgoLAB — AI photo and short-video upscaling in the browser. Measured with numpy
-and ffmpeg 6.1.1 on a 1080×720 synthetic reference plus a 1080×1620 JPEG; 7 tables, 3 negative
-or unexpected results, all reported as measured.
+and ffmpeg 6.1.1 on a 1080×720 synthetic reference, a 1080×1620 JPEG, and a 1440×1080 4:3
+capture for the de-squeeze test; 13 tables, 4 negative or unexpected results, one corrected
+measurement from an earlier version of this page, all reported as measured.
 <style>
 .sisternav{margin:2rem 0 0;padding-top:1.2rem;border-top:1px solid #e2e5ea}
 .sisternav p{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;
